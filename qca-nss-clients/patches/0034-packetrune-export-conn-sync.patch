@@ -1,0 +1,270 @@
+diff --git a/netlink/nss_nlipv4.c b/netlink/nss_nlipv4.c
+index 9778cdb..6f5c629 100644
+--- a/netlink/nss_nlipv4.c
++++ b/netlink/nss_nlipv4.c
+@@ -69,6 +69,10 @@ struct nss_nlipv4_ctx {
+ static int nss_nlipv4_ops_create_rule(struct sk_buff *skb, struct genl_info *info);
+ static int nss_nlipv4_ops_destroy_rule(struct sk_buff *skb, struct genl_info *info);
+ static int nss_nlipv4_process_notify(struct notifier_block *nb, unsigned long val, void *data);
++static void nss_nlipv4_process_event(void *app_data, struct nss_ipv4_msg *nim);
++static void nss_nlipv4_process_conn_sync_many(void *app_data, struct nss_ipv4_msg *nim);
++static struct sk_buff *nss_nlipv4_new_event_skb(size_t payload_len);
++static void nss_nlipv4_mcast_nim(struct nss_ipv4_msg *nim);
+ 
+ /*
+  * multicast group for sending message status & events
+@@ -653,6 +657,70 @@ static int nss_nlipv4_verify_identifier(struct nss_ipv4_rule_create_msg *msg)
+ 	return 0;
+ }
+ 
++static struct sk_buff *nss_nlipv4_new_event_skb(size_t payload_len)
++{
++	struct sk_buff *skb;
++	struct nss_nlcmn *cm;
++	int len;
++
++	len = nla_total_size(payload_len);
++
++	skb = genlmsg_new(len, GFP_ATOMIC);
++	if (!skb) {
++		nss_nl_error("unable to allocate NSS_NLIPV4 event skb\n");
++		return NULL;
++	}
++
++	cm = genlmsg_put(skb, 0, 0, &nss_nlipv4_family, 0, NSS_NLCMN_SUBSYS_IPV4);
++	if (!cm) {
++		nss_nl_error("unable to append NSS_NLIPV4 generic header\n");
++		nlmsg_free(skb);
++		return NULL;
++	}
++
++	cm->pid = 0;
++	return skb;
++}
++
++static void nss_nlipv4_mcast_nim(struct nss_ipv4_msg *nim)
++{
++	struct nss_nlipv4_rule *nl_rule;
++	struct sk_buff *skb;
++	size_t msg_len;
++	size_t copy_len;
++
++	msg_len = nss_cmn_get_msg_len(&nim->cm);
++	copy_len = offsetof(struct nss_nlipv4_rule, nim) + msg_len;
++
++	skb = nss_nlipv4_new_event_skb(copy_len);
++	if (!skb)
++		return;
++
++	nl_rule = nss_nl_get_data(skb);
++	memset(nl_rule, 0, copy_len);
++	memcpy(&nl_rule->nim, nim, msg_len);
++	nss_nl_mcast_event(&nss_nlipv4_family, skb);
++}
++
++static void nss_nlipv4_process_event(void *app_data, struct nss_ipv4_msg *nim)
++{
++	if (nim->cm.response != NSS_CMN_RESPONSE_NOTIFY)
++		return;
++
++	if (nim->cm.type != NSS_IPV4_RX_CONN_STATS_SYNC_MSG)
++		return;
++
++	nss_nlipv4_mcast_nim(nim);
++}
++
++static void nss_nlipv4_process_conn_sync_many(void *app_data, struct nss_ipv4_msg *nim)
++{
++	if (nim->cm.type != NSS_IPV4_TX_CONN_STATS_SYNC_MANY_MSG)
++		return;
++
++	nss_nlipv4_mcast_nim(nim);
++}
++
+ /*
+  * nss_nlipv4_process_notify()
+  * 	process notification messages from NSS
+@@ -670,6 +738,7 @@ static int nss_nlipv4_process_notify(struct notifier_block *nb, unsigned long va
+ 	}
+ 
+ 	nl_rule = nss_nl_get_data(skb);
++	memset(nl_rule, 0, sizeof(*nl_rule));
+ 	nss_stats = (struct nss_ipv4_stats_notification *)data;
+ 	memcpy(&nl_rule->stats, nss_stats, sizeof(struct nss_ipv4_stats_notification));
+ 	nss_nl_mcast_event(&nss_nlipv4_family, skb);
+@@ -995,11 +1064,27 @@ bool nss_nlipv4_init(void)
+ 		goto unreg_family;
+ 	}
+ 
++	ret = nss_ipv4_notify_register_listener(nss_nlipv4_process_event, NULL);
++	if (ret) {
++		nss_nl_info_always("Error: unable to register IPv4 notify listener\n");
++		goto unreg_stats;
++	}
++
++	ret = nss_ipv4_conn_sync_many_notify_register_listener(nss_nlipv4_process_conn_sync_many);
++	if (ret) {
++		nss_nl_info_always("Error: unable to register IPv4 conn_sync_many listener\n");
++		goto unreg_notify;
++	}
++
+ 	return true;
+ 
+ 	/*
+ 	 * undo all registeration
+ 	 */
++unreg_notify:
++	nss_ipv4_notify_unregister_listener(nss_nlipv4_process_event, NULL);
++unreg_stats:
++	nss_ipv4_stats_unregister_notifier(&nss_ipv4_stats_notifier_nb);
+ unreg_family:
+ 	genl_unregister_family(&nss_nlipv4_family);
+ 
+@@ -1016,6 +1101,12 @@ bool nss_nlipv4_exit(void)
+ 
+ 	nss_nl_info_always("Exit NSS netlink IPv4 handler\n");
+ 
++	/*
++	 * unregister conn sync callbacks for ipv4
++	 */
++	nss_ipv4_notify_unregister_listener(nss_nlipv4_process_event, NULL);
++	nss_ipv4_conn_sync_many_notify_unregister_listener(nss_nlipv4_process_conn_sync_many);
++
+ 	/*
+ 	 * unregister the ops family
+ 	 */
+diff --git a/netlink/nss_nlipv6.c b/netlink/nss_nlipv6.c
+index 3223ac0..600af0c 100644
+--- a/netlink/nss_nlipv6.c
++++ b/netlink/nss_nlipv6.c
+@@ -77,6 +77,10 @@ struct nss_nlipv6_ctx {
+ static int nss_nlipv6_ops_create_rule(struct sk_buff *skb, struct genl_info *info);
+ static int nss_nlipv6_ops_destroy_rule(struct sk_buff *skb, struct genl_info *info);
+ static int nss_nlipv6_process_notify(struct notifier_block *nb, unsigned long val, void *data);
++static void nss_nlipv6_process_event(void *app_data, struct nss_ipv6_msg *nim);
++static void nss_nlipv6_process_conn_sync_many(void *app_data, struct nss_ipv6_msg *nim);
++static struct sk_buff *nss_nlipv6_new_event_skb(size_t payload_len);
++static void nss_nlipv6_mcast_nim(struct nss_ipv6_msg *nim);
+ 
+ /*
+  * multicast group for sending message status & events
+@@ -650,6 +654,70 @@ static int nss_nlipv6_verify_identifier(struct nss_ipv6_rule_create_msg *msg)
+ 	return 0;
+ }
+ 
++static struct sk_buff *nss_nlipv6_new_event_skb(size_t payload_len)
++{
++	struct sk_buff *skb;
++	struct nss_nlcmn *cm;
++	int len;
++
++	len = nla_total_size(payload_len);
++
++	skb = genlmsg_new(len, GFP_ATOMIC);
++	if (!skb) {
++		nss_nl_error("unable to allocate NSS_NLIPV6 event skb\n");
++		return NULL;
++	}
++
++	cm = genlmsg_put(skb, 0, 0, &nss_nlipv6_family, 0, NSS_NLCMN_SUBSYS_IPV6);
++	if (!cm) {
++		nss_nl_error("unable to append NSS_NLIPV6 generic header\n");
++		nlmsg_free(skb);
++		return NULL;
++	}
++
++	cm->pid = 0;
++	return skb;
++}
++
++static void nss_nlipv6_mcast_nim(struct nss_ipv6_msg *nim)
++{
++	struct nss_nlipv6_rule *nl_rule;
++	struct sk_buff *skb;
++	size_t msg_len;
++	size_t copy_len;
++
++	msg_len = nss_cmn_get_msg_len(&nim->cm);
++	copy_len = offsetof(struct nss_nlipv6_rule, nim) + msg_len;
++
++	skb = nss_nlipv6_new_event_skb(copy_len);
++	if (!skb)
++		return;
++
++	nl_rule = nss_nl_get_data(skb);
++	memset(nl_rule, 0, copy_len);
++	memcpy(&nl_rule->nim, nim, msg_len);
++	nss_nl_mcast_event(&nss_nlipv6_family, skb);
++}
++
++static void nss_nlipv6_process_event(void *app_data, struct nss_ipv6_msg *nim)
++{
++	if (nim->cm.response != NSS_CMN_RESPONSE_NOTIFY)
++		return;
++
++	if (nim->cm.type != NSS_IPV6_RX_CONN_STATS_SYNC_MSG)
++		return;
++
++	nss_nlipv6_mcast_nim(nim);
++}
++
++static void nss_nlipv6_process_conn_sync_many(void *app_data, struct nss_ipv6_msg *nim)
++{
++	if (nim->cm.type != NSS_IPV6_TX_CONN_STATS_SYNC_MANY_MSG)
++		return;
++
++	nss_nlipv6_mcast_nim(nim);
++}
++
+ /*
+  * nss_nlipv6_process_notify()
+  *	process notification messages from NSS
+@@ -667,6 +735,7 @@ static int nss_nlipv6_process_notify(struct notifier_block *nb, unsigned long va
+ 	}
+ 
+ 	nl_rule = nss_nl_get_data(skb);
++	memset(nl_rule, 0, sizeof(*nl_rule));
+ 	nss_stats = (struct nss_ipv6_stats_notification *)data;
+ 	memcpy(&nl_rule->stats, nss_stats, sizeof(struct nss_ipv6_stats_notification));
+ 	nss_nl_mcast_event(&nss_nlipv6_family, skb);
+@@ -996,11 +1065,27 @@ bool nss_nlipv6_init(void)
+ 		goto unreg_family;
+ 	}
+ 
++	ret = nss_ipv6_notify_register_listener(nss_nlipv6_process_event, NULL);
++	if (ret) {
++		nss_nl_info_always("Error: unable to register IPv6 notify listener\n");
++		goto unreg_stats;
++	}
++
++	ret = nss_ipv6_conn_sync_many_notify_register_listener(nss_nlipv6_process_conn_sync_many);
++	if (ret) {
++		nss_nl_info_always("Error: unable to register IPv6 conn_sync_many listener\n");
++		goto unreg_notify;
++	}
++
+ 	return true;
+ 
+ 	/*
+ 	 * undo all registeration
+ 	 */
++unreg_notify:
++	nss_ipv6_notify_unregister_listener(nss_nlipv6_process_event, NULL);
++unreg_stats:
++	nss_ipv6_stats_unregister_notifier(&nss_ipv6_stats_notifier_nb);
+ unreg_family:
+ 	genl_unregister_family(&nss_nlipv6_family);
+ 
+@@ -1017,6 +1102,12 @@ bool nss_nlipv6_exit(void)
+ 
+ 	nss_nl_info_always("Exit NSS netlink IPV6 handler\n");
+ 
++	/*
++	 * Unregister conn sync callbacks for ipv6
++	 */
++	nss_ipv6_notify_unregister_listener(nss_nlipv6_process_event, NULL);
++	nss_ipv6_conn_sync_many_notify_unregister_listener(nss_nlipv6_process_conn_sync_many);
++
+ 	/*
+ 	 * Unregister the device callback handler for ipv6
+ 	 */
