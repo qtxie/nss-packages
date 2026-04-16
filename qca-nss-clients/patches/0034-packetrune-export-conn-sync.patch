@@ -13,33 +13,15 @@ index 9778cdb..6f5c629 100644
  
  /*
   * multicast group for sending message status & events
-@@ -653,6 +657,70 @@ static int nss_nlipv4_verify_identifier(struct nss_ipv4_rule_create_msg *msg)
+@@ -653,6 +657,52 @@ static int nss_nlipv4_verify_identifier(struct nss_ipv4_rule_create_msg *msg)
  	return 0;
  }
  
 +static struct sk_buff *nss_nlipv4_new_event_skb(size_t payload_len)
 +{
-+	struct sk_buff *skb;
-+	struct nss_nlcmn *cm;
-+	int len;
++	(void)payload_len;
 +
-+	len = nla_total_size(payload_len);
-+
-+	skb = genlmsg_new(len, GFP_ATOMIC);
-+	if (!skb) {
-+		nss_nl_error("unable to allocate NSS_NLIPV4 event skb\n");
-+		return NULL;
-+	}
-+
-+	cm = genlmsg_put(skb, 0, 0, &nss_nlipv4_family, 0, NSS_NLCMN_SUBSYS_IPV4);
-+	if (!cm) {
-+		nss_nl_error("unable to append NSS_NLIPV4 generic header\n");
-+		nlmsg_free(skb);
-+		return NULL;
-+	}
-+
-+	cm->pid = 0;
-+	return skb;
++	return nss_nl_new_msg(&nss_nlipv4_family, NSS_NLCMN_SUBSYS_IPV4);
 +}
 +
 +static void nss_nlipv4_mcast_nim(struct nss_ipv4_msg *nim)
@@ -148,33 +130,15 @@ index 3223ac0..600af0c 100644
  
  /*
   * multicast group for sending message status & events
-@@ -650,6 +654,70 @@ static int nss_nlipv6_verify_identifier(struct nss_ipv6_rule_create_msg *msg)
+@@ -650,6 +654,52 @@ static int nss_nlipv6_verify_identifier(struct nss_ipv6_rule_create_msg *msg)
  	return 0;
  }
  
 +static struct sk_buff *nss_nlipv6_new_event_skb(size_t payload_len)
 +{
-+	struct sk_buff *skb;
-+	struct nss_nlcmn *cm;
-+	int len;
++	(void)payload_len;
 +
-+	len = nla_total_size(payload_len);
-+
-+	skb = genlmsg_new(len, GFP_ATOMIC);
-+	if (!skb) {
-+		nss_nl_error("unable to allocate NSS_NLIPV6 event skb\n");
-+		return NULL;
-+	}
-+
-+	cm = genlmsg_put(skb, 0, 0, &nss_nlipv6_family, 0, NSS_NLCMN_SUBSYS_IPV6);
-+	if (!cm) {
-+		nss_nl_error("unable to append NSS_NLIPV6 generic header\n");
-+		nlmsg_free(skb);
-+		return NULL;
-+	}
-+
-+	cm->pid = 0;
-+	return skb;
++	return nss_nl_new_msg(&nss_nlipv6_family, NSS_NLCMN_SUBSYS_IPV6);
 +}
 +
 +static void nss_nlipv6_mcast_nim(struct nss_ipv6_msg *nim)
