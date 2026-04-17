@@ -1,46 +1,35 @@
 diff --git a/netlink/nss_nlipv4.c b/netlink/nss_nlipv4.c
-index 9778cdb..6f5c629 100644
+index 9778cdb..5951c77 100644
 --- a/netlink/nss_nlipv4.c
 +++ b/netlink/nss_nlipv4.c
-@@ -69,6 +69,10 @@ struct nss_nlipv4_ctx {
+@@ -69,6 +69,9 @@ struct nss_nlipv4_ctx {
  static int nss_nlipv4_ops_create_rule(struct sk_buff *skb, struct genl_info *info);
  static int nss_nlipv4_ops_destroy_rule(struct sk_buff *skb, struct genl_info *info);
  static int nss_nlipv4_process_notify(struct notifier_block *nb, unsigned long val, void *data);
 +static void nss_nlipv4_process_event(void *app_data, struct nss_ipv4_msg *nim);
 +static void nss_nlipv4_process_conn_sync_many(void *app_data, struct nss_ipv4_msg *nim);
-+static struct sk_buff *nss_nlipv4_new_event_skb(size_t payload_len);
 +static void nss_nlipv4_mcast_nim(struct nss_ipv4_msg *nim);
  
  /*
   * multicast group for sending message status & events
-@@ -653,6 +657,52 @@ static int nss_nlipv4_verify_identifier(struct nss_ipv4_rule_create_msg *msg)
+@@ -653,6 +657,42 @@ static int nss_nlipv4_verify_identifier(struct nss_ipv4_rule_create_msg *msg)
  	return 0;
  }
  
-+static struct sk_buff *nss_nlipv4_new_event_skb(size_t payload_len)
-+{
-+	(void)payload_len;
-+
-+	return nss_nl_new_msg(&nss_nlipv4_family, NSS_NLCMN_SUBSYS_IPV4);
-+}
-+
 +static void nss_nlipv4_mcast_nim(struct nss_ipv4_msg *nim)
 +{
 +	struct nss_nlipv4_rule *nl_rule;
 +	struct sk_buff *skb;
-+	size_t msg_len;
-+	size_t copy_len;
 +
-+	msg_len = nss_cmn_get_msg_len(&nim->cm);
-+	copy_len = offsetof(struct nss_nlipv4_rule, nim) + msg_len;
-+
-+	skb = nss_nlipv4_new_event_skb(copy_len);
-+	if (!skb)
++	skb = nss_nl_new_msg(&nss_nlipv4_family, NSS_NLCMN_SUBSYS_IPV4);
++	if (!skb) {
++		nss_nl_error("unable to allocate NSS_NLIPV4 event\n");
 +		return;
++	}
 +
 +	nl_rule = nss_nl_get_data(skb);
-+	memset(nl_rule, 0, copy_len);
-+	memcpy(&nl_rule->nim, nim, msg_len);
++	memset(nl_rule, 0, sizeof(*nl_rule));
++	memcpy(&nl_rule->nim, nim, sizeof(nl_rule->nim));
 +	nss_nl_mcast_event(&nss_nlipv4_family, skb);
 +}
 +
@@ -66,7 +55,7 @@ index 9778cdb..6f5c629 100644
  /*
   * nss_nlipv4_process_notify()
   * 	process notification messages from NSS
-@@ -670,6 +738,7 @@ static int nss_nlipv4_process_notify(struct notifier_block *nb, unsigned long va
+@@ -670,6 +707,7 @@ static int nss_nlipv4_process_notify(struct notifier_block *nb, unsigned long va
  	}
  
  	nl_rule = nss_nl_get_data(skb);
@@ -74,7 +63,7 @@ index 9778cdb..6f5c629 100644
  	nss_stats = (struct nss_ipv4_stats_notification *)data;
  	memcpy(&nl_rule->stats, nss_stats, sizeof(struct nss_ipv4_stats_notification));
  	nss_nl_mcast_event(&nss_nlipv4_family, skb);
-@@ -995,11 +1064,27 @@ bool nss_nlipv4_init(void)
+@@ -995,11 +1035,27 @@ bool nss_nlipv4_init(void)
  		goto unreg_family;
  	}
  
@@ -102,7 +91,7 @@ index 9778cdb..6f5c629 100644
  unreg_family:
  	genl_unregister_family(&nss_nlipv4_family);
  
-@@ -1016,6 +1101,12 @@ bool nss_nlipv4_exit(void)
+@@ -1016,6 +1072,12 @@ bool nss_nlipv4_exit(void)
  
  	nss_nl_info_always("Exit NSS netlink IPv4 handler\n");
  
@@ -116,48 +105,37 @@ index 9778cdb..6f5c629 100644
  	 * unregister the ops family
  	 */
 diff --git a/netlink/nss_nlipv6.c b/netlink/nss_nlipv6.c
-index 3223ac0..600af0c 100644
+index 3223ac0..6936b2d 100644
 --- a/netlink/nss_nlipv6.c
 +++ b/netlink/nss_nlipv6.c
-@@ -77,6 +77,10 @@ struct nss_nlipv6_ctx {
+@@ -77,6 +77,9 @@ struct nss_nlipv6_ctx {
  static int nss_nlipv6_ops_create_rule(struct sk_buff *skb, struct genl_info *info);
  static int nss_nlipv6_ops_destroy_rule(struct sk_buff *skb, struct genl_info *info);
  static int nss_nlipv6_process_notify(struct notifier_block *nb, unsigned long val, void *data);
 +static void nss_nlipv6_process_event(void *app_data, struct nss_ipv6_msg *nim);
 +static void nss_nlipv6_process_conn_sync_many(void *app_data, struct nss_ipv6_msg *nim);
-+static struct sk_buff *nss_nlipv6_new_event_skb(size_t payload_len);
 +static void nss_nlipv6_mcast_nim(struct nss_ipv6_msg *nim);
  
  /*
   * multicast group for sending message status & events
-@@ -650,6 +654,52 @@ static int nss_nlipv6_verify_identifier(struct nss_ipv6_rule_create_msg *msg)
+@@ -650,6 +654,42 @@ static int nss_nlipv6_verify_identifier(struct nss_ipv6_rule_create_msg *msg)
  	return 0;
  }
  
-+static struct sk_buff *nss_nlipv6_new_event_skb(size_t payload_len)
-+{
-+	(void)payload_len;
-+
-+	return nss_nl_new_msg(&nss_nlipv6_family, NSS_NLCMN_SUBSYS_IPV6);
-+}
-+
 +static void nss_nlipv6_mcast_nim(struct nss_ipv6_msg *nim)
 +{
 +	struct nss_nlipv6_rule *nl_rule;
 +	struct sk_buff *skb;
-+	size_t msg_len;
-+	size_t copy_len;
 +
-+	msg_len = nss_cmn_get_msg_len(&nim->cm);
-+	copy_len = offsetof(struct nss_nlipv6_rule, nim) + msg_len;
-+
-+	skb = nss_nlipv6_new_event_skb(copy_len);
-+	if (!skb)
++	skb = nss_nl_new_msg(&nss_nlipv6_family, NSS_NLCMN_SUBSYS_IPV6);
++	if (!skb) {
++		nss_nl_error("unable to allocate NSS_NLIPV6 event\n");
 +		return;
++	}
 +
 +	nl_rule = nss_nl_get_data(skb);
-+	memset(nl_rule, 0, copy_len);
-+	memcpy(&nl_rule->nim, nim, msg_len);
++	memset(nl_rule, 0, sizeof(*nl_rule));
++	memcpy(&nl_rule->nim, nim, sizeof(nl_rule->nim));
 +	nss_nl_mcast_event(&nss_nlipv6_family, skb);
 +}
 +
@@ -183,7 +161,7 @@ index 3223ac0..600af0c 100644
  /*
   * nss_nlipv6_process_notify()
   *	process notification messages from NSS
-@@ -667,6 +735,7 @@ static int nss_nlipv6_process_notify(struct notifier_block *nb, unsigned long va
+@@ -667,6 +710,7 @@ static int nss_nlipv6_process_notify(struct notifier_block *nb, unsigned long va
  	}
  
  	nl_rule = nss_nl_get_data(skb);
@@ -191,7 +169,7 @@ index 3223ac0..600af0c 100644
  	nss_stats = (struct nss_ipv6_stats_notification *)data;
  	memcpy(&nl_rule->stats, nss_stats, sizeof(struct nss_ipv6_stats_notification));
  	nss_nl_mcast_event(&nss_nlipv6_family, skb);
-@@ -996,11 +1065,27 @@ bool nss_nlipv6_init(void)
+@@ -996,11 +1036,27 @@ bool nss_nlipv6_init(void)
  		goto unreg_family;
  	}
  
@@ -219,7 +197,7 @@ index 3223ac0..600af0c 100644
  unreg_family:
  	genl_unregister_family(&nss_nlipv6_family);
  
-@@ -1017,6 +1102,12 @@ bool nss_nlipv6_exit(void)
+@@ -1017,6 +1073,12 @@ bool nss_nlipv6_exit(void)
  
  	nss_nl_info_always("Exit NSS netlink IPV6 handler\n");
  
